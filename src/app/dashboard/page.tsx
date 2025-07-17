@@ -352,16 +352,16 @@ export default function DashboardPage() {
       </aside>
 
       {/* Right Panel: Editor and Results */}
-      <main className="flex-1 flex flex-col h-screen">
+      <main className="flex-1 flex flex-col h-screen overflow-hidden">
         {!activeDb ? (
           <div className="flex-1 flex items-center justify-center text-muted-foreground">
             Select a database to begin.
           </div>
         ) : (
-          <div className="flex flex-col flex-1">
+          <div className="flex flex-col flex-1 h-full">
             {/* Top half: Query Editor */}
-            <div className="flex-1 flex flex-col h-1/2 border-b">
-              <header className="p-4 flex justify-between items-center border-b">
+            <div className="flex-1 flex flex-col border-b">
+              <header className="p-4 flex justify-between items-center border-b flex-shrink-0">
                 <div className="flex items-center gap-2">
                   <h2 className="text-lg font-medium">{DB_CONFIG.find(db => db.id === activeDb)?.name}</h2>
                   <span className="text-sm text-muted-foreground">/</span>
@@ -409,8 +409,8 @@ export default function DashboardPage() {
             </div>
 
             {/* Bottom half: Results */}
-            <div className="flex-1 flex flex-col h-1/2">
-              <header className="p-4 flex items-center gap-2 border-b">
+            <div className="flex-1 flex flex-col">
+              <header className="p-4 flex items-center gap-2 border-b flex-shrink-0">
                  <Code2 className="h-5 w-5" />
                  <h2 className="text-lg font-medium">Results</h2>
                  {activeCollection && <span className="text-sm text-muted-foreground">from &quot;{activeCollection}&quot; collection</span>}
