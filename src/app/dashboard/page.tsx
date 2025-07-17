@@ -7,43 +7,141 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MongoQuillLogo } from "@/components/icons";
 import { Database, Play, Loader2, Code2, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DB_CONTENT, DB_CONFIG } from "@/lib/data";
+import { DB_CONTENT as INITIAL_DB_CONTENT, DB_CONFIG } from "@/lib/data";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
-type DbId = keyof typeof DB_CONTENT;
+type DbId = keyof typeof INITIAL_DB_CONTENT;
 
 const DEFAULT_QUERY = `db.passengers.find({ 
   tier: "Solitaire PPS Club" 
 })`;
-// Note: This is a simulated environment.
-// Supported format: db.collection.find({ filter })
-// Supported operators: $gt, $lt, $gte, $lte, $ne, $in, $nin, $and, $or, $not
-// Click "Run Query" to see results.
 
-// A simple query executor
-function executeQuery(data: Record<string, any[]>, collectionName: string, query: any) {
-  if (!data[collectionName]) {
-    throw new Error(`Collection "${collectionName}" not found.`);
-  }
+// --- Query Execution Logic ---
 
-  let results = [...data[collectionName]];
-  let filter = {};
+function executeQuery(
+  data: Record<string, any[]>,
+  operation: ParsedQuery
+): { collection: string; data: any; message?: string } {
+    const collectionName = operation.collectionName;
+    if (!data[collectionName] && operation.command !== 'find') {
+      throw new Error(`Collection "${collectionName}" not found.`);
+    }
 
-  if (typeof query === 'object' && query !== null && !Array.isArray(query)) {
-    filter = query;
-  }
-  
-  if (Object.keys(filter).length > 0) {
-    results = results.filter(doc => evaluateFilter(doc, filter));
-  }
-  
-  // Note: Mongo's find doesn't have a top-level limit property in the query object itself.
-  // It's usually chained, e.g. .limit(). We are not supporting that chaining here.
-  // The user can add "limit" to the JSON query for simulation purposes if needed,
-  // but it's not standard MongoQL `find` syntax inside the first argument.
+    switch (operation.command) {
+        case 'find': {
+            if (!data[collectionName]) {
+                throw new Error(`Collection "${collectionName}" not found.`);
+            }
+            let results = [...data[collectionName]];
+            const filter = operation.args[0] || {};
+            if (Object.keys(filter).length > 0) {
+                results = results.filter(doc => evaluateFilter(doc, filter));
+            }
+            return { collection: collectionName, data: results };
+        }
+        case 'insertOne': {
+            const doc = operation.args[0];
+            if (!doc || typeof doc !== 'object') throw new Error('insertOne requires a document argument.');
+            data[collectionName].push({ _id: `new_${Date.now()}`, ...doc });
+            return { collection: collectionName, data: { acknowledged: true, insertedId: `new_${Date.now()}` }, message: 'Document inserted.' };
+        }
+        case 'insertMany': {
+             const docs = operation.args[0];
+             if (!Array.isArray(docs)) throw new Error('insertMany requires an array of documents.');
+             const insertedIds = docs.map((doc, i) => `new_${Date.now()}_${i}`);
+             docs.forEach((doc, i) => data[collectionName].push({ _id: insertedIds[i], ...doc }));
+             return { collection: collectionName, data: { acknowledged: true, insertedIds }, message: `${docs.length} documents inserted.` };
+        }
+        case 'updateOne':
+        case 'updateMany': {
+            const filter = operation.args[0] || {};
+            const update = operation.args[1] || {};
+            if (Object.keys(update).length === 0) throw new Error('Update operator is required.');
 
-  return { collection: collectionName, data: results };
+            let modifiedCount = 0;
+            const collectionData = data[collectionName];
+            
+            for (let i = 0; i < collectionData.length; i++) {
+                if (evaluateFilter(collectionData[i], filter)) {
+                    collectionData[i] = applyUpdate(collectionData[i], update);
+                    modifiedCount++;
+                    if (operation.command === 'updateOne') break;
+                }
+            }
+            
+            return { collection: collectionName, data: { acknowledged: true, modifiedCount, matchedCount: modifiedCount }, message: `${modifiedCount} document(s) updated.` };
+        }
+        case 'deleteOne':
+        case 'deleteMany': {
+            const filter = operation.args[0] || {};
+            let deletedCount = 0;
+            const initialCount = data[collectionName].length;
+
+            const newData = data[collectionName].filter(doc => {
+                const shouldDelete = evaluateFilter(doc, filter);
+                if (shouldDelete) {
+                    if (operation.command === 'deleteOne' && deletedCount === 0) {
+                        deletedCount++;
+                        return false;
+                    }
+                    if (operation.command === 'deleteMany') {
+                       return false;
+                    }
+                }
+                return true;
+            });
+            
+            if (operation.command === 'deleteMany') {
+                deletedCount = initialCount - newData.length;
+            }
+
+            data[collectionName] = newData;
+            
+            return { collection: collectionName, data: { acknowledged: true, deletedCount }, message: `${deletedCount} document(s) deleted.` };
+        }
+        default:
+            throw new Error(`Unsupported command: ${operation.command}`);
+    }
+}
+
+function applyUpdate(doc: any, update: any) {
+    const newDoc = { ...doc };
+    for (const op in update) {
+        if (op === '$set') {
+            for (const field in update.$set) {
+                setNestedValue(newDoc, field, update.$set[field]);
+            }
+        } else if (op === '$unset') {
+            for (const field in update.$unset) {
+                deleteNestedValue(newDoc, field);
+            }
+        }
+        // Add more update operators like $inc, $rename etc. here if needed
+    }
+    return newDoc;
+}
+
+function setNestedValue(obj: any, path: string, value: any) {
+    const keys = path.split('.');
+    let current = obj;
+    for (let i = 0; i < keys.length - 1; i++) {
+        if (current[keys[i]] === undefined) {
+            current[keys[i]] = {};
+        }
+        current = current[keys[i]];
+    }
+    current[keys[keys.length - 1]] = value;
+}
+
+function deleteNestedValue(obj: any, path: string) {
+    const keys = path.split('.');
+    let current = obj;
+    for (let i = 0; i < keys.length - 1; i++) {
+        if (current[keys[i]] === undefined) return;
+        current = current[keys[i]];
+    }
+    delete current[keys[keys.length - 1]];
 }
 
 
@@ -66,6 +164,11 @@ function evaluateFilter(doc: any, filter: any): boolean {
   }
 
   return filterKeys.every(key => {
+    // Top-level keys can't be operators
+    if (key.startsWith('$')) {
+        return true; // Or throw error, depending on strictness
+    }
+
     const docValue = getNestedValue(doc, key);
     const filterValue = filter[key];
 
@@ -98,54 +201,46 @@ function getNestedValue(obj: any, path: string) {
   return path.split('.').reduce((acc, part) => acc && acc[part], obj);
 }
 
-// A simple MongoQL find() query parser
-function parseMongoQuery(queryString: string): { collectionName: string; query: any } {
-  const query = queryString.replace(/\s+/g, ' ').trim();
-  
-  const findRegex = /^db\.([a-zA-Z0-9_-]+)\.find\((.*)\)$/;
-  const match = query.match(findRegex);
+// --- Query Parsing Logic ---
 
-  if (!match) {
-    throw new Error('Invalid query format. Expected: db.collectionName.find({ ... })');
-  }
+type SupportedCommand = 'find' | 'insertOne' | 'insertMany' | 'updateOne' | 'updateMany' | 'deleteOne' | 'deleteMany';
+interface ParsedQuery {
+    command: SupportedCommand;
+    collectionName: string;
+    args: any[];
+}
+const SUPPORTED_COMMANDS: SupportedCommand[] = ['find', 'insertOne', 'insertMany', 'updateOne', 'updateMany', 'deleteOne', 'deleteMany'];
 
-  const [, collectionName, argsString] = match;
+function parseMongoQuery(queryString: string): ParsedQuery {
+    const query = queryString.replace(/\s+/g, ' ').trim();
+    
+    const commandRegex = new RegExp(`^db\\.([a-zA-Z0-9_-]+)\\.(${SUPPORTED_COMMANDS.join('|')})\\((.*)\\)$`);
+    const match = query.match(commandRegex);
 
-  if (!argsString) {
-      return { collectionName, query: {} };
-  }
-  
-  // Extract only the first argument (the query object)
-  // This is a simplified parser: it won't handle complex JS in the query.
-  let bracketCount = 0;
-  let queryEndIndex = -1;
-  for(let i = 0; i < argsString.length; i++) {
-    if (argsString[i] === '{') bracketCount++;
-    if (argsString[i] === '}') bracketCount--;
-    if (bracketCount === 0 && argsString[i] === '}') {
-      queryEndIndex = i + 1;
-      break;
+    if (!match) {
+        throw new Error('Invalid query format or unsupported command. Supported: ' + SUPPORTED_COMMANDS.join(', '));
     }
-  }
 
-  if (queryEndIndex === -1) {
-     throw new Error("Invalid or incomplete query object in find().");
-  }
+    const [, collectionName, command, argsString] = match;
 
-  const queryObjectStr = argsString.substring(0, queryEndIndex);
-
-  try {
-    // This is a security risk in a real app, but for this simulation it's okay.
-    // It allows parsing of keys without quotes, which is common in mongosh.
-    const queryObj = new Function(`return ${queryObjectStr}`)();
-    return { collectionName, query: queryObj };
-  } catch (e) {
-    throw new Error("Failed to parse query object. Please ensure it's valid JavaScript/JSON.");
-  }
+    if (!argsString) {
+        return { command: command as SupportedCommand, collectionName, args: [] };
+    }
+  
+    try {
+        // This is a security risk in a real app, but for this simulation it's okay.
+        // It allows parsing of JS objects, not just strict JSON.
+        const args = new Function(`return [${argsString}]`)();
+        return { command: command as SupportedCommand, collectionName, args };
+    } catch (e) {
+        console.error("Parsing Error:", e);
+        throw new Error("Failed to parse query arguments. Ensure they are valid JavaScript objects/values.");
+    }
 }
 
 
 export default function DashboardPage() {
+  const [dbData, setDbData] = useState(INITIAL_DB_CONTENT);
   const [activeDb, setActiveDb] = useState<DbId | null>("singapore-airlines");
   const [query, setQuery] = useState(DEFAULT_QUERY);
   const [result, setResult] = useState<string | null>(null);
@@ -156,8 +251,8 @@ export default function DashboardPage() {
 
   const collections = useMemo(() => {
     if (!activeDb) return [];
-    return Object.keys(DB_CONTENT[activeDb]);
-  }, [activeDb]);
+    return Object.keys(dbData[activeDb]);
+  }, [activeDb, dbData]);
 
   const handleSelectDb = (dbId: DbId) => {
     setActiveDb(dbId);
@@ -176,14 +271,26 @@ export default function DashboardPage() {
 
     setTimeout(() => {
       try {
-        const { collectionName, query: queryObj } = parseMongoQuery(query);
-        const dbData = DB_CONTENT[activeDb];
-        const { collection, data } = executeQuery(dbData, collectionName, queryObj);
+        const parsedOperation = parseMongoQuery(query);
+        
+        // Make a deep copy to mutate
+        const currentDbData = JSON.parse(JSON.stringify(dbData[activeDb]));
+        
+        const { collection, data, message } = executeQuery(currentDbData, parsedOperation);
+        
+        // If it was a mutation, update the state
+        if (['insertOne', 'insertMany', 'updateOne', 'updateMany', 'deleteOne', 'deleteMany'].includes(parsedOperation.command)) {
+            setDbData(prev => ({
+                ...prev,
+                [activeDb]: currentDbData
+            }));
+        }
 
         setActiveCollection(collection);
         setResult(JSON.stringify(data, null, 2));
+
       } catch (e: any) {
-        setError(e.message || "Invalid query format.");
+        setError(e.message || "An unexpected error occurred.");
       } finally {
         setIsLoading(false);
       }
