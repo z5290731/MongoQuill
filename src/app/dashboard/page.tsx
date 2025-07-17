@@ -13,39 +13,39 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 type DbId = keyof typeof DB_CONTENT;
 
-const DEFAULT_QUERY = `{
-  "find": "passengers",
-  "filter": { "tier": "Solitaire PPS Club" },
-  "limit": 5
-}
+const DEFAULT_QUERY = `db.passengers.find({ 
+  tier: "Solitaire PPS Club" 
+})`;
 // Note: This is a simulated environment.
-// Supported operations: find, filter, limit.
+// Supported format: db.collection.find({ filter })
 // Supported operators: $gt, $lt, $gte, $lte, $ne, $in, $nin, $and, $or, $not
-// Click "Run Query" to see results.`;
+// Click "Run Query" to see results.
 
 // A simple query executor
-function executeQuery(data: Record<string, any[]>, query: any) {
-  if (!query.find || typeof query.find !== 'string') {
-    throw new Error('Missing or invalid "find" property for collection name.');
-  }
-
-  const collectionName = query.find;
+function executeQuery(data: Record<string, any[]>, collectionName: string, query: any) {
   if (!data[collectionName]) {
     throw new Error(`Collection "${collectionName}" not found.`);
   }
 
   let results = [...data[collectionName]];
+  let filter = {};
 
-  if (query.filter && typeof query.filter === 'object') {
-    results = results.filter(doc => evaluateFilter(doc, query.filter));
+  if (typeof query === 'object' && query !== null && !Array.isArray(query)) {
+    filter = query;
   }
-
-  if (query.limit && typeof query.limit === 'number') {
-    results = results.slice(0, query.limit);
+  
+  if (Object.keys(filter).length > 0) {
+    results = results.filter(doc => evaluateFilter(doc, filter));
   }
+  
+  // Note: Mongo's find doesn't have a top-level limit property in the query object itself.
+  // It's usually chained, e.g. .limit(). We are not supporting that chaining here.
+  // The user can add "limit" to the JSON query for simulation purposes if needed,
+  // but it's not standard MongoQL `find` syntax inside the first argument.
 
   return { collection: collectionName, data: results };
 }
+
 
 function evaluateFilter(doc: any, filter: any): boolean {
   const filterKeys = Object.keys(filter);
@@ -98,6 +98,52 @@ function getNestedValue(obj: any, path: string) {
   return path.split('.').reduce((acc, part) => acc && acc[part], obj);
 }
 
+// A simple MongoQL find() query parser
+function parseMongoQuery(queryString: string): { collectionName: string; query: any } {
+  const query = queryString.replace(/\s+/g, ' ').trim();
+  
+  const findRegex = /^db\.([a-zA-Z0-9_-]+)\.find\((.*)\)$/;
+  const match = query.match(findRegex);
+
+  if (!match) {
+    throw new Error('Invalid query format. Expected: db.collectionName.find({ ... })');
+  }
+
+  const [, collectionName, argsString] = match;
+
+  if (!argsString) {
+      return { collectionName, query: {} };
+  }
+  
+  // Extract only the first argument (the query object)
+  // This is a simplified parser: it won't handle complex JS in the query.
+  let bracketCount = 0;
+  let queryEndIndex = -1;
+  for(let i = 0; i < argsString.length; i++) {
+    if (argsString[i] === '{') bracketCount++;
+    if (argsString[i] === '}') bracketCount--;
+    if (bracketCount === 0 && argsString[i] === '}') {
+      queryEndIndex = i + 1;
+      break;
+    }
+  }
+
+  if (queryEndIndex === -1) {
+     throw new Error("Invalid or incomplete query object in find().");
+  }
+
+  const queryObjectStr = argsString.substring(0, queryEndIndex);
+
+  try {
+    // This is a security risk in a real app, but for this simulation it's okay.
+    // It allows parsing of keys without quotes, which is common in mongosh.
+    const queryObj = new Function(`return ${queryObjectStr}`)();
+    return { collectionName, query: queryObj };
+  } catch (e) {
+    throw new Error("Failed to parse query object. Please ensure it's valid JavaScript/JSON.");
+  }
+}
+
 
 export default function DashboardPage() {
   const [activeDb, setActiveDb] = useState<DbId | null>("singapore-airlines");
@@ -116,7 +162,7 @@ export default function DashboardPage() {
   const handleSelectDb = (dbId: DbId) => {
     setActiveDb(dbId);
     setResult(null);
-    setQuery(DEFAULT_QUERY);
+    setQuery(`db.${DB_CONFIG.find(db => db.id === dbId)?.name.toLowerCase().replace(/\s/g, '') || 'collection'}.find({})`);
     setActiveCollection(null);
     setError(null);
   };
@@ -130,17 +176,14 @@ export default function DashboardPage() {
 
     setTimeout(() => {
       try {
-        // Remove comments and parse the query string
-        const cleanedQueryString = query.replace(/\/\/.*$/gm, '');
-        const queryObj = JSON.parse(cleanedQueryString);
-        
+        const { collectionName, query: queryObj } = parseMongoQuery(query);
         const dbData = DB_CONTENT[activeDb];
-        const { collection, data } = executeQuery(dbData, queryObj);
+        const { collection, data } = executeQuery(dbData, collectionName, queryObj);
 
         setActiveCollection(collection);
         setResult(JSON.stringify(data, null, 2));
       } catch (e: any) {
-        setError(e.message || "Invalid query format. Please use valid JSON.");
+        setError(e.message || "Invalid query format.");
       } finally {
         setIsLoading(false);
       }
@@ -207,7 +250,7 @@ export default function DashboardPage() {
                 <Textarea
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Enter your MongoDB query here..."
+                  placeholder="Enter your MongoDB query here... e.g., db.passengers.find({ tier: 'KrisFlyer' })"
                   className="absolute inset-0 w-full h-full resize-none rounded-none border-none focus-visible:ring-0 font-code text-sm p-4"
                 />
               </div>
