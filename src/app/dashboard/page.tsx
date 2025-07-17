@@ -272,7 +272,9 @@ export default function DashboardPage() {
   const handleSelectDb = (dbId: DbId) => {
     setActiveDb(dbId);
     setResult(null);
-    setQuery(`db.${DB_CONFIG.find(db => db.id === dbId)?.name.toLowerCase().replace(/\s/g, '') || 'collection'}.find({})`);
+    const newDbCollections = Object.keys(INITIAL_DB_CONTENT[dbId]);
+    const firstCollection = newDbCollections.length > 0 ? newDbCollections[0] : 'collection';
+    setQuery(`db.${firstCollection}.find({})`);
     setActiveCollection(null);
     setError(null);
   };
