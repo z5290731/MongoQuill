@@ -126,7 +126,7 @@ function setNestedValue(obj: any, path: string, value: any) {
     const keys = path.split('.');
     let current = obj;
     for (let i = 0; i < keys.length - 1; i++) {
-        if (current[keys[i]] === undefined) {
+        if (current[keys[i]] === undefined || typeof current[keys[i]] !== 'object') {
             current[keys[i]] = {};
         }
         current = current[keys[i]];
@@ -146,6 +146,7 @@ function deleteNestedValue(obj: any, path: string) {
 
 
 function evaluateFilter(doc: any, filter: any): boolean {
+  if (!filter || typeof filter !== 'object') return true;
   const filterKeys = Object.keys(filter);
 
   if (filterKeys.includes('$and')) {
@@ -159,7 +160,7 @@ function evaluateFilter(doc: any, filter: any): boolean {
   }
   
   if (filterKeys.includes('$not')) {
-    if (typeof filter.$not !== 'object') throw new Error('$not must be an object');
+    if (typeof filter.$not !== 'object' || filter.$not === null) throw new Error('$not must be an object');
     return !evaluateFilter(doc, filter.$not);
   }
 
@@ -174,6 +175,9 @@ function evaluateFilter(doc: any, filter: any): boolean {
 
     if (typeof filterValue === 'object' && filterValue !== null && !Array.isArray(filterValue)) {
       const op = Object.keys(filterValue)[0];
+       if (!op.startsWith('$')) {
+         return JSON.stringify(docValue) === JSON.stringify(filterValue);
+       }
       const val = filterValue[op];
 
       switch(op) {
@@ -189,6 +193,7 @@ function evaluateFilter(doc: any, filter: any): boolean {
           if (!Array.isArray(val)) throw new Error(`$nin requires an array value.`);
           return !val.includes(docValue);
         default:
+           // Fallback for nested objects without operators
           return JSON.stringify(docValue) === JSON.stringify(filterValue);
       }
     }
@@ -358,7 +363,7 @@ export default function DashboardPage() {
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Enter your MongoDB query here... e.g., db.passengers.find({ tier: 'KrisFlyer' })"
-                  className="absolute inset-0 w-full h-full resize-none rounded-none border-none focus-visible:ring-0 font-code text-sm p-4"
+                  className="absolute inset-0 w-full h-full resize-none rounded-none border-none focus-visible:ring-0 font-code text-base p-4"
                 />
               </div>
             </div>
@@ -399,3 +404,5 @@ export default function DashboardPage() {
     </div>
   );
 }
+
+    

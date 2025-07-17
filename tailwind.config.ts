@@ -10,7 +10,7 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        body: ['Inter', 'sans-serif'],
+        sans: ['Inter', 'sans-serif'],
         headline: ['Inter', 'sans-serif'],
         code: ['"Source Code Pro"', 'monospace'],
       },
@@ -97,3 +97,5 @@ export default {
   },
   plugins: [require('tailwindcss-animate')],
 } satisfies Config;
+
+    
